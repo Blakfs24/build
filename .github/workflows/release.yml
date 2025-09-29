@@ -1,0 +1,462 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - 'test'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: '1.25.x'
+  GO_TAGS: 'with_quic with_dhcp with_wireguard with_utls with_acme with_gvisor with_clash_api with_tailscale'
+  IS_STABLE: ${{ !contains(github.ref, '-') }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}${{ matrix.arch && format(' ({0})', matrix.arch) }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            os: macos-13
+            arch: x86_64
+            goarch: amd64
+            bundle_arch: x64
+          - platform: macos
+            os: macos-14
+            arch: arm64
+            goarch: arm64
+            bundle_arch: arm64
+          - platform: windows
+            os: windows-2022
+            arch: x64
+            goarch: amd64
+          - platform: linux
+            os: ubuntu-22.04
+            arch: x86_64
+            goarch: amd64
+            bundle_arch: x64
+            appimagetool_arch: x86_64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            libcore/go.sum
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux'
+        run: make setup-linux
+
+      - name: Install FUSE runtime (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libfuse2
+
+      - name: Install MinGW-w64 (amd64)
+        if: matrix.platform == 'windows' && matrix.goarch == 'amd64'
+        shell: pwsh
+        run: |
+          choco install mingw -y --no-progress
+          echo 'C:\\ProgramData\\chocolatey\\lib\\mingw\\tools\\install\\mingw64\\bin' >> $env:GITHUB_PATH
+          gcc --version
+
+      - name: Configure Flutter (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          flutter --version
+          flutter config --enable-macos-desktop
+
+      - name: Configure Flutter (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          flutter --version
+          flutter config --enable-windows-desktop
+
+      - name: Configure Flutter (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          flutter --version
+          flutter config --enable-linux-desktop
+
+      - name: Flutter pub get
+        if: matrix.platform != 'windows'
+        run: flutter pub get
+
+      - name: Flutter pub get (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: flutter pub get
+
+      - name: Install flutter_distributor
+        if: matrix.platform != 'windows'
+        run: |
+          set -euxo pipefail
+          dart pub global activate flutter_distributor
+          echo "$HOME/.pub-cache/bin" >> $GITHUB_PATH
+
+      - name: Install flutter_distributor (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          dart pub global activate flutter_distributor
+          $pubCache = Join-Path $env:USERPROFILE 'AppData\\Local\\Pub\\Cache\\bin'
+          Add-Content $env:GITHUB_PATH $pubCache
+
+      - name: Install packaging tools (macOS)
+        if: matrix.platform == 'macos'
+        run: npm install -g appdmg
+
+      - name: Install appimagetool
+        if: matrix.platform == 'linux'
+        run: |
+          set -euxo pipefail
+          TOOL="appimagetool-${{ matrix.appimagetool_arch }}.AppImage"
+          curl -L -o appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/${TOOL}"
+          chmod +x appimagetool
+          sudo mv appimagetool /usr/local/bin/appimagetool
+
+      - name: Derive version from tag
+        if: matrix.platform != 'windows'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TAG="${GITHUB_REF_NAME:-}"
+          BUILD_NUMBER="${GITHUB_RUN_NUMBER}"
+          PLATFORM="${{ matrix.platform }}"
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([\-\.][0-9A-Za-z\.]+)?$ ]]; then
+            APP_VERSION="${TAG#v}"
+          else
+            APP_VERSION=$(sed -nE 's/^version:[[:space:]]*([^+[:space:]]+).*/\1/p' pubspec.yaml | head -n1)
+            [ -n "$APP_VERSION" ] || APP_VERSION="0.1.0"
+          fi
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9A-Za-z\.\-]+$ ]]; then
+            if [[ "$PLATFORM" == "macos" ]]; then
+              sed -i '' -E "s/^version:\\s*.*/version: ${APP_VERSION}+${BUILD_NUMBER}/" pubspec.yaml
+            else
+              sed -i -E "s/^version:\\s*.*/version: ${APP_VERSION}+${BUILD_NUMBER}/" pubspec.yaml
+            fi
+          fi
+          echo "APP_VERSION=$APP_VERSION" >> $GITHUB_ENV
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_ENV
+          echo "TAG=$TAG" >> $GITHUB_ENV
+
+      - name: Derive version from tag (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $tag = "$env:GITHUB_REF_NAME"
+          $buildNumber = "$env:GITHUB_RUN_NUMBER"
+          if ($tag -match '^v\d+\.\d+\.\d+([\-\.][0-9A-Za-z\.]+)?$') {
+            $appVersion = $tag -replace '^v',''
+          } else {
+            $line = Select-String -Path pubspec.yaml -Pattern '^version:' | Select-Object -First 1
+            if ($line) { $appVersion = ($line.Line -replace 'version:\s*','').Split('+')[0].Trim() } else { $appVersion = '0.1.0' }
+          }
+          if ($tag -match '^v\d+\.\d+\.\d+([\-\.][0-9A-Za-z\.]+)?$') {
+            $content = Get-Content pubspec.yaml -Raw
+            $content = [regex]::Replace($content, '^version:\s*.*', "version: $appVersion+$buildNumber", 'Multiline')
+            Set-Content pubspec.yaml $content
+          }
+          echo "APP_VERSION=$appVersion" >> $env:GITHUB_ENV
+          echo "BUILD_NUMBER=$buildNumber" >> $env:GITHUB_ENV
+          echo "TAG=$tag" >> $env:GITHUB_ENV
+
+      - name: Collect dependency versions (sing-box)
+        if: matrix.platform != 'windows'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pushd libcore >/dev/null
+          SBV=$(go list -m -f '{{.Version}}' github.com/sagernet/sing-box || true)
+          popd >/dev/null
+          echo "SING_BOX_VERSION=$SBV" >> $GITHUB_ENV
+
+      - name: Collect dependency versions (sing-box) (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          Push-Location libcore
+          $sbv = (go list -m -f '{{.Version}}' github.com/sagernet/sing-box) 2>$null
+          Pop-Location
+          echo "SING_BOX_VERSION=$sbv" >> $env:GITHUB_ENV
+
+      - name: Build libcore (macOS)
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          COMMIT=$(git rev-parse --short HEAD)
+          LDFLAGS="-X main.Version=v${APP_VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${DATE} -X main.SingBoxVersion=${SING_BOX_VERSION}"
+          make -C libcore darwin ARCH=${{ matrix.goarch }} LDFLAGS="$LDFLAGS"
+          ls -lah libcore/build
+
+      - name: Build libcore (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $env:CGO_ENABLED = '1'
+          $env:GOOS = 'windows'
+          $env:GOARCH = '${{ matrix.goarch }}'
+          if ('${{ matrix.goarch }}' -eq 'amd64') { $env:CC = 'gcc' } else { $env:CC = '' }
+          if (-not (Test-Path 'libcore/build')) { New-Item -ItemType Directory -Force -Path 'libcore/build' | Out-Null }
+          Push-Location libcore
+          $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+          $commit = git rev-parse --short HEAD
+          $ldflags = "-X main.Version=v$env:APP_VERSION -X main.Commit=$commit -X main.BuildDate=$date -X main.SingBoxVersion=$env:SING_BOX_VERSION"
+          go build -v -trimpath -buildmode=c-shared -tags "$env:GO_TAGS" -ldflags "$ldflags" -o build/libcore.dll .
+          Pop-Location
+          Get-ChildItem libcore/build
+
+      - name: Build libcore (Linux)
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          COMMIT=$(git rev-parse --short HEAD)
+          LDFLAGS="-X main.Version=v${APP_VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${DATE} -X main.SingBoxVersion=${SING_BOX_VERSION}"
+          make -C libcore linux ARCH=${{ matrix.goarch }} LDFLAGS="$LDFLAGS"
+          ls -lah libcore/build
+
+      - name: Build Flutter app (macOS)
+        if: matrix.platform == 'macos'
+        env:
+          ARCHS: ${{ matrix.arch }}
+          ONLY_ACTIVE_ARCH: 'YES'
+          EXCLUDED_ARCHS: ${{ matrix.arch == 'arm64' && 'x86_64' || 'arm64' }}
+        run: flutter build macos --release
+
+      - name: Embed libcore into app bundle
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP_BUNDLE="build/macos/Build/Products/Release/singtools.app"
+          DEST="$APP_BUNDLE/Contents/Frameworks"
+          test -d "$APP_BUNDLE" || { echo "App bundle not found: $APP_BUNDLE"; exit 1; }
+          cp libcore/build/libcore.dylib "$DEST/"
+          ls -lah "$DEST"
+
+      - name: Prepare dist directory
+        if: matrix.platform != 'windows'
+        run: mkdir -p dist
+
+      - name: Prepare dist directory (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: New-Item -ItemType Directory -Path dist -Force | Out-Null
+
+      - name: Archive macOS app bundle
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP_BUNDLE="build/macos/Build/Products/Release/singtools.app"
+          ARCH_SUFFIX="${{ matrix.bundle_arch }}"
+          ZIP_OUT="singtools-${APP_VERSION}-macos-${ARCH_SUFFIX}.app.zip"
+          ditto -c -k --keepParent "$APP_BUNDLE" "dist/$ZIP_OUT"
+          echo "APP_ZIP=dist/$ZIP_OUT" >> $GITHUB_ENV
+
+      - name: Package macOS DMG
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          flutter_distributor package --platform macos --targets dmg
+          case "${{ matrix.arch }}" in
+            x86_64) PKG_ARCH=x64;;
+            arm64)  PKG_ARCH=arm64;;
+            *)      PKG_ARCH=${{ matrix.arch }};;
+          esac
+          DMG_OUT="singtools-${APP_VERSION}-macos-${PKG_ARCH}.dmg"
+          DMG_SRC=$(find dist -type f -name '*.dmg' | head -n1)
+          if [[ -z "$DMG_SRC" ]]; then
+            echo "No DMG produced by flutter_distributor" >&2
+            exit 1
+          fi
+          mv "$DMG_SRC" "dist/$DMG_OUT"
+          rm -rf dist/macos || true
+          echo "DMG_PATH=dist/$DMG_OUT" >> $GITHUB_ENV
+
+      - name: Package Windows ZIP
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          flutter_distributor package --platform windows --targets zip
+          $zip = Get-ChildItem -Path dist -Recurse -Include *.zip | Select-Object -First 1
+          if (-not $zip) { throw "No ZIP produced by flutter_distributor" }
+          $archSuffix = '${{ matrix.arch }}'
+          $out = "dist/singtools-$env:APP_VERSION-windows-$archSuffix.zip"
+          Move-Item $zip.FullName $out -Force
+          Remove-Item -Recurse -Force dist\windows -ErrorAction SilentlyContinue
+          echo "ZIP_PATH=$out" >> $env:GITHUB_ENV
+
+      - name: Package Linux AppImage
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          flutter_distributor package --platform linux --targets appimage --build-target-platform linux-${{ matrix.bundle_arch }}
+          OUT="singtools-${APP_VERSION}-linux-${{ matrix.bundle_arch }}.AppImage"
+          APPIMAGE=$(find dist -type f -name '*.AppImage' | head -n1)
+          if [[ -z "$APPIMAGE" ]]; then
+            echo "No AppImage produced by flutter_distributor" >&2
+            exit 1
+          fi
+          mv "$APPIMAGE" "dist/$OUT"
+          rm -rf dist/linux || true
+          echo "APPIMAGE_PATH=dist/$OUT" >> $GITHUB_ENV
+
+      - name: List dist contents
+        if: matrix.platform != 'windows'
+        run: ls -Rlah dist
+
+      - name: List dist contents (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: Get-ChildItem dist -Recurse
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifact-${{ matrix.platform }}${{ matrix.arch && format('-{0}', matrix.arch) }}
+          path: dist
+          if-no-files-found: error
+
+  # macos-universal:
+  #   name: Build macOS universal DMG
+  #   needs: build
+  #   runs-on: macos-14
+  #   steps:
+  #     - name: Derive version
+  #       shell: bash
+  #       run: |
+  #         set -euxo pipefail
+  #         TAG="${GITHUB_REF_NAME:-}"
+  #         if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([\-\.][0-9A-Za-z\.]+)?$ ]]; then
+  #           APP_VERSION="${TAG#v}"
+  #         else
+  #           APP_VERSION=$(sed -nE 's/^version:[[:space:]]*([^+[:space:]]+).*/\1/p' pubspec.yaml | head -n1)
+  #           [ -n "$APP_VERSION" ] || APP_VERSION="0.1.0"
+  #         fi
+  #         echo "APP_VERSION=$APP_VERSION" >> $GITHUB_ENV
+
+  #     - name: Download macOS x86_64 artifact
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: artifact-macos-x86_64
+  #         path: intel
+
+  #     - name: Download macOS arm64 artifact
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: artifact-macos-arm64
+  #         path: apple
+
+  #     - name: Expand app bundles
+  #       shell: bash
+  #       run: |
+  #         set -euxo pipefail
+  #         mkdir -p app_x64 app_arm64
+  #         ZIP_X64=$(find intel -name '*.app.zip' | head -n1)
+  #         ZIP_ARM64=$(find apple -name '*.app.zip' | head -n1)
+  #         if [[ -z "$ZIP_X64" || -z "$ZIP_ARM64" ]]; then
+  #           echo "Missing macOS app zip artifacts" >&2
+  #           exit 1
+  #         fi
+  #         ditto -x -k "$ZIP_X64" app_x64
+  #         ditto -x -k "$ZIP_ARM64" app_arm64
+  #         ls -lah app_x64 app_arm64
+
+  #     - name: Create universal app and lipo binaries
+  #       shell: bash
+  #       run: |
+  #         set -euxo pipefail
+  #         BASE="app_arm64/singtools.app"
+  #         OTHER="app_x64/singtools.app"
+  #         OUTDIR="universal"
+  #         mkdir -p "$OUTDIR"
+  #         rsync -a "$BASE/" "$OUTDIR/singtools.app/"
+  #         is_macho() {
+  #           file "$1" | grep -q 'Mach-O'
+  #         }
+  #         while IFS= read -r -d '' f; do
+  #           rel="${f#$BASE/}"
+  #           f2="$OTHER/$rel"
+  #           out="$OUTDIR/singtools.app/$rel"
+  #           if [ -f "$f2" ] && is_macho "$f" && is_macho "$f2"; then
+  #             tmp=$(mktemp)
+  #             lipo -create -output "$tmp" "$f" "$f2"
+  #             chmod +x "$tmp" || true
+  #             mv "$tmp" "$out"
+  #             echo "Universalized: $rel"
+  #           fi
+  #         done < <(find "$BASE" -type f -print0)
+  #         file "$OUTDIR/singtools.app/Contents/MacOS/singtools"
+  #         file "$OUTDIR/singtools.app/Contents/Frameworks/libcore.dylib"
+
+  #     - name: Create universal DMG
+  #       shell: bash
+  #       run: |
+  #         set -euxo pipefail
+  #         mkdir -p dist
+  #         APP_BUNDLE="universal/singtools.app"
+  #         DMG="singtools-${APP_VERSION}-macos-universal.dmg"
+  #         hdiutil create -volname "SingTools" -srcfolder "$APP_BUNDLE" -ov -format UDZO "$DMG"
+  #         mv "$DMG" dist/
+  #         ls -lah dist
+
+  #     - name: Upload universal artifact
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: artifact-macos-universal
+  #         path: dist
+  #         if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: artifact-*
+          merge-multiple: true
+          path: dist
+
+      - name: List release assets
+        run: ls -Rlah dist
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: SingTools ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/*
