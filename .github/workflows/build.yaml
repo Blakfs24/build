@@ -24,7 +24,7 @@ jobs:
             os: ubuntu-22.04
             arch: amd64
           - platform: macos
-            os: macos-13
+            os: macos-latest
             arch: amd64
           - platform: macos
             os: macos-latest
@@ -57,6 +57,28 @@ jobs:
         if: matrix.platform == 'windows'
         shell: pwsh
         run: choco install -y innosetup --no-progress
+
+      - name: Verify Inno Setup installation
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $isccPath = Get-Command iscc -ErrorAction SilentlyContinue
+          if ($isccPath) {
+            Write-Host "Inno Setup Compiler found at: $($isccPath.Source)"
+          } else {
+            Write-Host "ERROR: Inno Setup Compiler (iscc) not found in PATH"
+            Write-Host "Checking default installation location..."
+            $defaultPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+            if (Test-Path $defaultPath) {
+              Write-Host "Found at default location: $defaultPath"
+              $innoDir = Split-Path $defaultPath
+              Add-Content $env:GITHUB_PATH $innoDir
+              Write-Host "Added to PATH: $innoDir"
+            } else {
+              Write-Host "ERROR: Inno Setup not found at default location either"
+              exit 1
+            }
+          }
 
       - name: Install llvm-mingw toolchain (ARM64)
         if: matrix.platform == 'windows' && matrix.arch == 'arm64'
@@ -92,9 +114,15 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.1'
+          go-version: '1.25.4'
           cache-dependency-path: |
             libcore/go.sum
+
+      - name: Install Zig
+        if: matrix.platform == 'windows'
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: '0.13.0'
 
       - name: Setup Flutter Master
         if: startsWith(matrix.os, 'windows-11-arm') || startsWith(matrix.os, 'ubuntu-24.04-arm')
@@ -109,11 +137,32 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Update build number
+        run: dart tool/update_build_number.dart
+
       - name: Get Flutter Dependency
         run: flutter pub get
 
       - name: Setup
         run: dart setup.dart ${{ matrix.platform }} ${{ matrix.arch && format('--arch {0}', matrix.arch) }} ${{ env.IS_STABLE == 'true' && '--env stable' || '' }}
+
+      - name: Verify Windows build output
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          Write-Host "=== Checking dist directory contents ==="
+          Get-ChildItem -Path ./dist -Recurse | Select-Object FullName, Length, LastWriteTime
+          Write-Host ""
+          Write-Host "=== Checking for .exe installer files ==="
+          $exeFiles = Get-ChildItem -Path ./dist -Recurse -Filter "*.exe"
+          if ($exeFiles) {
+            foreach ($file in $exeFiles) {
+              Write-Host "Found: $($file.FullName) ($([math]::Round($file.Length / 1MB, 2)) MB)"
+            }
+          } else {
+            Write-Host "WARNING: No .exe files found in dist directory!"
+            exit 1
+          }
 
       - name: Upload
         uses: actions/upload-artifact@v4
@@ -212,13 +261,23 @@ jobs:
             if [ -d "$dir" ]; then
               platform=$(basename "$dir" | sed 's/artifact-//')
               cd "$dir"
+              moved_any=0
               for file in *; do
                 if [ -f "$file" ]; then
+                  if [[ "$platform" == windows* && "$file" == *.exe && "$file" != *Setup*.exe ]]; then
+                    echo "Skipping portable executable $file for $platform (installer expected)."
+                    continue
+                  fi
                   newname="SingTools-${platform}-${file}"
                   mv "$file" "../../release/$newname"
+                  moved_any=1
                 fi
               done
               cd ../..
+              if [[ "$platform" == windows* && $moved_any -eq 0 ]]; then
+                echo "error: 未找到 Windows 安装器产物 (文件名需包含 Setup) in $dir" >&2
+                exit 1
+              fi
             fi
           done
 
