@@ -37,19 +37,11 @@ jobs:
             arch: arm64
 
     steps:
-      - name: Setup rust
-        if: startsWith(matrix.os, 'windows-11-arm')
-        run: |
-          Invoke-WebRequest -Uri "https://win.rustup.rs/aarch64" -OutFile rustup-init.exe
-          .\rustup-init.exe -y --default-toolchain stable
-          $cargoPath = "$env:USERPROFILE\.cargo\bin"
-          Add-Content $env:GITHUB_PATH $cargoPath
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
           repository: Blakfs24/singtools
-          ref: polish
+          ref: dev-next
           token: ${{ secrets.ACCESS_TOKEN }}
           submodules: recursive
 
@@ -80,28 +72,28 @@ jobs:
             }
           }
 
-      - name: Install llvm-mingw toolchain (ARM64)
-        if: matrix.platform == 'windows' && matrix.arch == 'arm64'
-        shell: pwsh
-        run: |
-          $version = '20240907'
-          $zipUrl = "https://github.com/mstorsjo/llvm-mingw/releases/download/$version/llvm-mingw-$version-ucrt-x86_64.zip"
-          $downloadPath = Join-Path $env:RUNNER_TEMP "llvm-mingw.zip"
-          Invoke-WebRequest -Uri $zipUrl -OutFile $downloadPath
-          $extractPath = Join-Path $env:RUNNER_TEMP "llvm-mingw"
-          New-Item -ItemType Directory -Path $extractPath -Force | Out-Null
-          Expand-Archive -Path $downloadPath -DestinationPath $extractPath -Force
-          $toolchainDir = Get-ChildItem $extractPath | Where-Object { $_.PSIsContainer } | Select-Object -First 1
-          if (-not $toolchainDir) {
-            throw "Failed to locate extracted llvm-mingw toolchain directory"
-          }
-          $binPath = Join-Path $toolchainDir.FullName 'bin'
-          Add-Content $env:GITHUB_PATH $binPath
-          $ccPath = Join-Path $binPath 'aarch64-w64-mingw32-gcc.exe'
-          if (-not (Test-Path $ccPath)) {
-            throw "Expected compiler not found at $ccPath"
-          }
-          Add-Content $env:GITHUB_ENV "CC_WINDOWS_ARM64=$ccPath"
+      # - name: Install llvm-mingw toolchain (ARM64)
+      #   if: matrix.platform == 'windows' && matrix.arch == 'arm64'
+      #   shell: pwsh
+      #   run: |
+      #     $version = '20240907'
+      #     $zipUrl = "https://github.com/mstorsjo/llvm-mingw/releases/download/$version/llvm-mingw-$version-ucrt-x86_64.zip"
+      #     $downloadPath = Join-Path $env:RUNNER_TEMP "llvm-mingw.zip"
+      #     Invoke-WebRequest -Uri $zipUrl -OutFile $downloadPath
+      #     $extractPath = Join-Path $env:RUNNER_TEMP "llvm-mingw"
+      #     New-Item -ItemType Directory -Path $extractPath -Force | Out-Null
+      #     Expand-Archive -Path $downloadPath -DestinationPath $extractPath -Force
+      #     $toolchainDir = Get-ChildItem $extractPath | Where-Object { $_.PSIsContainer } | Select-Object -First 1
+      #     if (-not $toolchainDir) {
+      #       throw "Failed to locate extracted llvm-mingw toolchain directory"
+      #     }
+      #     $binPath = Join-Path $toolchainDir.FullName 'bin'
+      #     Add-Content $env:GITHUB_PATH $binPath
+      #     $ccPath = Join-Path $binPath 'aarch64-w64-mingw32-gcc.exe'
+      #     if (-not (Test-Path $ccPath)) {
+      #       throw "Expected compiler not found at $ccPath"
+      #     }
+      #     Add-Content $env:GITHUB_ENV "CC_WINDOWS_ARM64=$ccPath"
 
       - name: Setup Android Signing
         if: startsWith(matrix.platform,'android')
