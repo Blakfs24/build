@@ -138,7 +138,7 @@ jobs:
                 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
                 -DAUTO_FETCH_DEPS=ON && \
             cmake --build build_lib --config Release --target subconverter_static_full --parallel $(sysctl -n hw.ncpu)
-            ll && pwd && tree
+            ls && pwd && tree
             cp subconverter/build_lib/libsubconverter.a ../
           else
             cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
