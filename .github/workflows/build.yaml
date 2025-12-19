@@ -136,15 +136,17 @@ jobs:
                 -DBUILD_FULL_STATIC=ON \
                 -DFORCE_FETCH_DEPS=ON \
                 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-                -DAUTO_FETCH_DEPS=ON
+                -DAUTO_FETCH_DEPS=ON && make -j2
+            ll && pwd && tree
+            cp subconverter/build/libsubconverter.a ../
           else
             cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
 
       - name: make subconverter (Windows)
-        if: matrix.platform != 'macos'
+        if: matrix.platform == 'windows'
         run: |
-          cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_C_COMPILER='zig cc' -DCMAKE_CXX_COMPILER='zig c++'"
+          cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_C_COMPILER=zig -DCMAKE_C_COMPILER_ARG1=cc -DCMAKE_CXX_COMPILER=zig -DCMAKE_CXX_COMPILER_ARG1=c++"
       
       - name: make subconverter (linux)
         if: matrix.platform == 'linux'
