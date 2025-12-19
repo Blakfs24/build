@@ -72,28 +72,33 @@ jobs:
             }
           }
 
-      # - name: Install llvm-mingw toolchain (ARM64)
-      #   if: matrix.platform == 'windows' && matrix.arch == 'arm64'
-      #   shell: pwsh
-      #   run: |
-      #     $version = '20240907'
-      #     $zipUrl = "https://github.com/mstorsjo/llvm-mingw/releases/download/$version/llvm-mingw-$version-ucrt-x86_64.zip"
-      #     $downloadPath = Join-Path $env:RUNNER_TEMP "llvm-mingw.zip"
-      #     Invoke-WebRequest -Uri $zipUrl -OutFile $downloadPath
-      #     $extractPath = Join-Path $env:RUNNER_TEMP "llvm-mingw"
-      #     New-Item -ItemType Directory -Path $extractPath -Force | Out-Null
-      #     Expand-Archive -Path $downloadPath -DestinationPath $extractPath -Force
-      #     $toolchainDir = Get-ChildItem $extractPath | Where-Object { $_.PSIsContainer } | Select-Object -First 1
-      #     if (-not $toolchainDir) {
-      #       throw "Failed to locate extracted llvm-mingw toolchain directory"
-      #     }
-      #     $binPath = Join-Path $toolchainDir.FullName 'bin'
-      #     Add-Content $env:GITHUB_PATH $binPath
-      #     $ccPath = Join-Path $binPath 'aarch64-w64-mingw32-gcc.exe'
-      #     if (-not (Test-Path $ccPath)) {
-      #       throw "Expected compiler not found at $ccPath"
-      #     }
-      #     Add-Content $env:GITHUB_ENV "CC_WINDOWS_ARM64=$ccPath"
+      - name: Install llvm-mingw toolchain (ARM64)
+        if: matrix.platform == 'windows' && matrix.arch == 'arm64'
+        shell: pwsh
+        run: |
+          $version = '20241217'
+          # On ARM64 Windows runner, use ARM64-native llvm-mingw toolchain
+          $zipUrl = "https://github.com/mstorsjo/llvm-mingw/releases/download/$version/llvm-mingw-$version-ucrt-aarch64.zip"
+          $downloadPath = Join-Path $env:RUNNER_TEMP "llvm-mingw.zip"
+          Write-Host "Downloading llvm-mingw from: $zipUrl"
+          Invoke-WebRequest -Uri $zipUrl -OutFile $downloadPath
+          $extractPath = Join-Path $env:RUNNER_TEMP "llvm-mingw"
+          New-Item -ItemType Directory -Path $extractPath -Force | Out-Null
+          Expand-Archive -Path $downloadPath -DestinationPath $extractPath -Force
+          $toolchainDir = Get-ChildItem $extractPath | Where-Object { $_.PSIsContainer } | Select-Object -First 1
+          if (-not $toolchainDir) {
+            throw "Failed to locate extracted llvm-mingw toolchain directory"
+          }
+          $binPath = Join-Path $toolchainDir.FullName 'bin'
+          Add-Content $env:GITHUB_PATH $binPath
+          Write-Host "Added to PATH: $binPath"
+          # Verify the ARM64 cross-compiler exists
+          $ccPath = Join-Path $binPath 'aarch64-w64-mingw32-gcc.exe'
+          if (-not (Test-Path $ccPath)) {
+            throw "Expected compiler not found at $ccPath"
+          }
+          Write-Host "Found ARM64 compiler: $ccPath"
+          Add-Content $env:GITHUB_ENV "CC_WINDOWS_ARM64=$ccPath"
 
       - name: Setup Android Signing
         if: startsWith(matrix.platform,'android')
@@ -115,6 +120,24 @@ jobs:
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: '0.13.0'
+
+      - name: make subconverter (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          if [ "${{ matrix.arch }}" == "amd64" ]; then
+            cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=x86_64"
+          else
+            cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
+          fi
+
+      - name: make subconverter (Windows)
+        if: matrix.platform != 'macos'
+        run: |
+          cd libcore && make prebuild
+
+      - name: make libcore
+        run: |
+          cd libcore && make ${{ matrix.platform }}
 
       - name: Setup Flutter Master
         if: startsWith(matrix.os, 'windows-11-arm') || startsWith(matrix.os, 'ubuntu-24.04-arm')
