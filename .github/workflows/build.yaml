@@ -155,7 +155,7 @@ jobs:
 
       - name: make libcore
         run: |
-          cd libcore && make ${{ matrix.platform }}
+          cd libcore && make ${{ matrix.platform }} ARCH=amd64
 
       - name: Setup Flutter Master
         if: startsWith(matrix.os, 'windows-11-arm') || startsWith(matrix.os, 'ubuntu-24.04-arm')
