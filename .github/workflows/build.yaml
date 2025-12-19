@@ -2,6 +2,7 @@ name: build
 
 on:
   push:
+    branches: [ main ]
     tags:
       - 'v*'
   workflow_dispatch:
@@ -48,7 +49,9 @@ jobs:
       - name: Install Inno Setup 6
         if: matrix.platform == 'windows'
         shell: pwsh
-        run: choco install -y innosetup --no-progress
+        run: |
+          choco install -y innosetup --no-progress
+          choco install -y pkgconfiglite --no-progress
 
       - name: Verify Inno Setup installation
         if: matrix.platform == 'windows'
@@ -125,7 +128,14 @@ jobs:
         if: matrix.platform == 'macos'
         run: |
           if [ "${{ matrix.arch }}" == "amd64" ]; then
-            cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=x86_64"
+            cd libcore && cmake -B build \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+                -DBUILD_STATIC_LIBRARY=ON \
+                -DBUILD_FULL_STATIC=ON \
+                -DFORCE_FETCH_DEPS=ON \
+                -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+                -DAUTO_FETCH_DEPS=ON
           else
             cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
