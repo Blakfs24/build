@@ -139,23 +139,18 @@ jobs:
                 -DAUTO_FETCH_DEPS=ON && \
             cmake --build build_lib --config Release --target subconverter_static_full --parallel $(sysctl -n hw.ncpu)
             cp build_lib/libsubconverter_static_full.a ../internal/converter/libsubconverter.a
+            cd ../ && make ${{ matrix.platform }} ARCH=amd64
           else
             cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
+            make ${{ matrix.platform }} ARCH=arm64
           fi
 
-      # - name: make subconverter (Windows)
-      #   if: matrix.platform == 'windows'
-      #   run: |
-      #     cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_C_COMPILER=zig -DCMAKE_C_COMPILER_ARG1=cc -DCMAKE_CXX_COMPILER=zig -DCMAKE_CXX_COMPILER_ARG1=c++"
-      
       - name: make subconverter (linux)
         if: matrix.platform != 'macos'
         run: |
           cd libcore && make prebuild
+          make ${{ matrix.platform }}
 
-      - name: make libcore
-        run: |
-          cd libcore && make ${{ matrix.platform }} ARCH=amd64
 
       - name: Setup Flutter Master
         if: startsWith(matrix.os, 'windows-11-arm') || startsWith(matrix.os, 'ubuntu-24.04-arm')
