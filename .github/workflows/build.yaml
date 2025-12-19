@@ -128,7 +128,8 @@ jobs:
         if: matrix.platform == 'macos'
         run: |
           if [ "${{ matrix.arch }}" == "amd64" ]; then
-            cd libcore && cmake -B build \
+            cd libcore && git clone https://github.com/Micha7delHowerk3ihnr/subconverter.git && \
+            cd subconverter && cmake -B build \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_OSX_ARCHITECTURES=x86_64 \
                 -DBUILD_STATIC_LIBRARY=ON \
@@ -142,6 +143,11 @@ jobs:
 
       - name: make subconverter (Windows)
         if: matrix.platform != 'macos'
+        run: |
+          cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_C_COMPILER='zig cc' -DCMAKE_CXX_COMPILER='zig c++'"
+      
+      - name: make subconverter (linux)
+        if: matrix.platform == 'linux'
         run: |
           cd libcore && make prebuild
 
