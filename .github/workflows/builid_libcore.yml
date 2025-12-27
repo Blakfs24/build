@@ -1,0 +1,174 @@
+name: Build Libcore
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'libcore/**'
+      - '.github/workflows/build_libcore.yml'
+
+env:
+  GO_VERSION: '1.25.x'
+  GO_TAGS: 'with_quic with_dhcp with_wireguard with_utls with_acme with_gvisor with_clash_api with_tailscale'
+  ZIG_VERSION: '0.13.0'
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux builds
+          - platform: linux
+            os: ubuntu-22.04
+            arch: amd64
+          - platform: linux
+            os: ubuntu-24.04-arm
+            arch: arm64
+          # macOS builds
+          - platform: macos
+            os: macos-15-intel
+            arch: amd64
+          - platform: macos
+            os: macos-latest
+            arch: arm64
+          # Windows builds - use Zig as C/C++ compiler
+          - platform: windows
+            os: windows-latest
+            arch: amd64
+          - platform: windows
+            os: windows-11-arm
+            arch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: Blakfs24/singtools
+          ref: dev-next
+          token: ${{ secrets.ACCESS_TOKEN }}
+          submodules: recursive
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: libcore/go.sum
+
+      # Windows: Install Zig as C/C++ compiler
+      - name: Install Zig (Windows)
+        if: matrix.platform == 'windows'
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Verify Zig installation (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          zig version
+          Write-Host "Zig will be used as C/C++ compiler for Windows build"
+
+      # Linux: Install build dependencies
+      - name: Install build dependencies (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build
+
+      # macOS: Ensure Xcode command line tools
+      - name: Setup Xcode (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          xcode-select --print-path
+          clang --version
+
+      # Build subconverter static library
+      - name: Build subconverter (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          if [ "${{ matrix.arch }}" == "amd64" ]; then
+            cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=x86_64"
+          else
+            cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
+          fi
+
+      - name: Build subconverter (Linux)
+        if: matrix.platform == 'linux'
+        run: cd libcore && make prebuild
+
+      - name: Build subconverter (Windows)
+        if: matrix.platform == 'windows'
+        shell: bash
+        env:
+          CC: zig cc
+          CXX: zig c++
+        run: cd libcore && make prebuild
+
+      # Build libcore dynamic library
+      - name: Build libcore (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          cd libcore && make macos ARCH=${{ matrix.arch }}
+
+      - name: Build libcore (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          cd libcore && make linux ARCH=${{ matrix.arch }}
+
+      - name: Build libcore (Windows)
+        if: matrix.platform == 'windows'
+        shell: bash
+        env:
+          CC: zig cc
+          CXX: zig c++
+        run: |
+          cd libcore && make windows ARCH=${{ matrix.arch }}
+
+      # Verify build output
+      - name: Verify build output
+        shell: bash
+        run: |
+          echo "=== Build output ==="
+          ls -lah libcore/build/ || echo "No build directory found"
+          
+          case "${{ matrix.platform }}" in
+            windows)
+              if [ -f "libcore/build/libcore.dll" ]; then
+                echo "✓ libcore.dll created successfully"
+                file libcore/build/libcore.dll
+              else
+                echo "✗ libcore.dll not found!"
+                exit 1
+              fi
+              ;;
+            linux)
+              if [ -f "libcore/build/libcore.so" ]; then
+                echo "✓ libcore.so created successfully"
+                file libcore/build/libcore.so
+              else
+                echo "✗ libcore.so not found!"
+                exit 1
+              fi
+              ;;
+            macos)
+              if [ -f "libcore/build/libcore.dylib" ]; then
+                echo "✓ libcore.dylib created successfully"
+                file libcore/build/libcore.dylib
+              else
+                echo "✗ libcore.dylib not found!"
+                exit 1
+              fi
+              ;;
+          esac
+
+      # Upload artifacts
+      - name: Upload libcore artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libcore-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            libcore/build/libcore.*
+          if-no-files-found: error
