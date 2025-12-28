@@ -10,7 +10,7 @@ on:
 env:
   GO_VERSION: '1.25.x'
   GO_TAGS: 'with_quic with_dhcp with_wireguard with_utls with_acme with_gvisor with_clash_api with_tailscale'
-  ZIG_VERSION: '0.13.0'
+  ZIG_VERSION: '0.15.2'
 
 jobs:
   build:
@@ -29,7 +29,7 @@ jobs:
             arch: arm64
           # macOS builds
           - platform: macos
-            os: macos-15-intel
+            os: macos-14
             arch: amd64
           - platform: macos
             os: macos-latest
@@ -38,9 +38,11 @@ jobs:
           - platform: windows
             os: windows-latest
             arch: amd64
+            zig_target: x86_64-windows-gnu
           - platform: windows
             os: windows-11-arm
             arch: arm64
+            zig_target: aarch64-windows-gnu
 
     steps:
       - name: Checkout
@@ -60,7 +62,7 @@ jobs:
       # Windows: Install Zig as C/C++ compiler
       - name: Install Zig (Windows)
         if: matrix.platform == 'windows'
-        uses: goto-bus-stop/setup-zig@v2
+        uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
 
@@ -70,6 +72,41 @@ jobs:
         run: |
           zig version
           Write-Host "Zig will be used as C/C++ compiler for Windows build"
+
+      - name: Create Zig wrapper scripts (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          # Create zig-cc.bat wrapper with target
+          @"
+          @echo off
+          zig cc -target ${{ matrix.zig_target }} %*
+          "@ | Out-File -FilePath zig-cc.bat -Encoding ascii
+          
+          # Create zig-cxx.bat wrapper with target
+          @"
+          @echo off
+          zig c++ -target ${{ matrix.zig_target }} %*
+          "@ | Out-File -FilePath zig-cxx.bat -Encoding ascii
+          
+          # Create zig-ar.bat wrapper
+          @"
+          @echo off
+          zig ar %*
+          "@ | Out-File -FilePath zig-ar.bat -Encoding ascii
+          
+          # Create zig-ranlib.bat wrapper (no-op for zig)
+          @"
+          @echo off
+          rem zig ar creates indexes automatically, ranlib is a no-op
+          "@ | Out-File -FilePath zig-ranlib.bat -Encoding ascii
+          
+          Write-Host "Created Zig wrapper scripts for target: ${{ matrix.zig_target }}"
+
+      - name: Install Ninja (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: choco install ninja -y --no-progress
 
       # Linux: Install build dependencies
       - name: Install build dependencies (Linux)
@@ -101,11 +138,50 @@ jobs:
 
       - name: Build subconverter (Windows)
         if: matrix.platform == 'windows'
-        shell: bash
-        env:
-          CC: zig cc
-          CXX: zig c++
-        run: cd libcore && make prebuild
+        shell: pwsh
+        run: |
+          cd libcore
+          
+          # Clone subconverter if not exists
+          if (-not (Test-Path "subconverter")) {
+            git clone --depth 1 https://github.com/Blakfs24/subconverter.git subconverter
+          }
+          
+          # Create build directory
+          if (-not (Test-Path "subconverter/build_lib")) {
+            New-Item -ItemType Directory -Path "subconverter/build_lib" -Force | Out-Null
+          }
+          
+          # Configure with CMake using Zig wrappers
+          cd subconverter/build_lib
+          cmake -G "Ninja" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER="${{ github.workspace }}/zig-cc.bat" `
+            -DCMAKE_CXX_COMPILER="${{ github.workspace }}/zig-cxx.bat" `
+            -DCMAKE_AR="${{ github.workspace }}/zig-ar.bat" `
+            -DCMAKE_RANLIB="${{ github.workspace }}/zig-ranlib.bat" `
+            -DCMAKE_EXE_LINKER_FLAGS="" `
+            -DCMAKE_SHARED_LINKER_FLAGS="" `
+            -DBUILD_RELEASE_APP=OFF `
+            -DBUILD_WITH_PIC=ON `
+            -DBUILD_STATIC_LIBRARY=ON `
+            -DFORCE_FETCH_DEPS=ON `
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 `
+            ..
+          
+          # Build
+          cmake --build . --config Release --target subconverter_static_full --parallel $env:NUMBER_OF_PROCESSORS
+          
+          # Copy to expected location
+          cd ../..
+          New-Item -ItemType Directory -Path "internal/converter" -Force | Out-Null
+          if (Test-Path "subconverter/build_lib/subconverter_static_full.lib") {
+            Copy-Item "subconverter/build_lib/subconverter_static_full.lib" "internal/converter/libsubconverter.a"
+          } elseif (Test-Path "subconverter/build_lib/libsubconverter_static_full.a") {
+            Copy-Item "subconverter/build_lib/libsubconverter_static_full.a" "internal/converter/libsubconverter.a"
+          }
+          
+          Write-Host "Subconverter library built successfully"
 
       # Build libcore dynamic library
       - name: Build libcore (macOS)
@@ -120,12 +196,28 @@ jobs:
 
       - name: Build libcore (Windows)
         if: matrix.platform == 'windows'
-        shell: bash
+        shell: pwsh
         env:
-          CC: zig cc
-          CXX: zig c++
+          CGO_ENABLED: '1'
+          GOOS: windows
+          GOARCH: ${{ matrix.arch }}
+          CC: ${{ github.workspace }}/zig-cc.bat
+          CXX: ${{ github.workspace }}/zig-cxx.bat
         run: |
-          cd libcore && make windows ARCH=${{ matrix.arch }}
+          cd libcore
+          
+          # Create build directory
+          if (-not (Test-Path "build")) {
+            New-Item -ItemType Directory -Path "build" -Force | Out-Null
+          }
+          
+          # Build with Go
+          go build -v -trimpath -buildmode=c-shared `
+            -tags "${{ env.GO_TAGS }}" `
+            -ldflags "-s -w" `
+            -o build/libcore.dll .
+          
+          Write-Host "libcore.dll built successfully"
 
       # Verify build output
       - name: Verify build output
