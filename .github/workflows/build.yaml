@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    # branches: [ main ]
+    branches: [ main ]
     tags:
       - 'v*'
   workflow_dispatch:
@@ -120,9 +120,9 @@ jobs:
 
       - name: Install Zig
         if: matrix.platform == 'windows'
-        uses: goto-bus-stop/setup-zig@v2
+        uses: mlugg/setup-zig@v2
         with:
-          version: '0.13.0'
+          version: '0.15.2'
 
       - name: make subconverter (macOS)
         if: matrix.platform == 'macos'
@@ -135,7 +135,7 @@ jobs:
                 -DBUILD_STATIC_LIBRARY=ON \
                 -DBUILD_FULL_STATIC=ON \
                 -DFORCE_FETCH_DEPS=ON \
-                -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+                -DCMAKE_POLICY_VERSION_MINIMUM=3.14 \
                 -DAUTO_FETCH_DEPS=ON && \
             cmake --build build_lib --config Release --target subconverter_static_full --parallel $(sysctl -n hw.ncpu)
             cp build_lib/libsubconverter_static_full.a ../internal/converter/libsubconverter.a
@@ -146,9 +146,15 @@ jobs:
           fi
 
       - name: make subconverter (linux)
-        if: matrix.platform != 'macos'
+        if: matrix.platform == 'linux'
         run: |
           cd libcore && make prebuild
+          make ${{ matrix.platform }}
+
+      - name: make subconverter (widows)
+        if: matrix.platform == 'windows'
+        run: |
+          cd libcore && make zig-wrappers prebuild-windows SHELL=cmd USE_ZIG=1
           make ${{ matrix.platform }}
 
 
