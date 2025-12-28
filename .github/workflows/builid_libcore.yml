@@ -146,48 +146,7 @@ jobs:
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
-          cd libcore
-          
-          # Clone subconverter if not exists
-          if (-not (Test-Path "subconverter")) {
-            git clone --depth 1 https://github.com/Blakfs24/subconverter.git subconverter
-          }
-          
-          # Create build directory
-          if (-not (Test-Path "subconverter/build_lib")) {
-            New-Item -ItemType Directory -Path "subconverter/build_lib" -Force | Out-Null
-          }
-          
-          # Configure with CMake using Zig wrappers
-          cd subconverter/build_lib
-          cmake -G "Ninja" `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_C_COMPILER="${{ github.workspace }}/zig-cc.bat" `
-            -DCMAKE_CXX_COMPILER="${{ github.workspace }}/zig-cxx.bat" `
-            -DCMAKE_AR="${{ github.workspace }}/zig-ar.bat" `
-            -DCMAKE_RANLIB="${{ github.workspace }}/zig-ranlib.bat" `
-            -DCMAKE_EXE_LINKER_FLAGS="" `
-            -DCMAKE_SHARED_LINKER_FLAGS="" `
-            -DBUILD_RELEASE_APP=OFF `
-            -DBUILD_WITH_PIC=ON `
-            -DBUILD_STATIC_LIBRARY=ON `
-            -DFORCE_FETCH_DEPS=ON `
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 `
-            ..
-          
-          # Build
-          cmake --build . --config Release --target subconverter_static_full --parallel $env:NUMBER_OF_PROCESSORS
-          
-          # Copy to expected location
-          cd ../..
-          New-Item -ItemType Directory -Path "internal/converter" -Force | Out-Null
-          if (Test-Path "subconverter/build_lib/subconverter_static_full.lib") {
-            Copy-Item "subconverter/build_lib/subconverter_static_full.lib" "internal/converter/libsubconverter.a"
-          } elseif (Test-Path "subconverter/build_lib/libsubconverter_static_full.a") {
-            Copy-Item "subconverter/build_lib/libsubconverter_static_full.a" "internal/converter/libsubconverter.a"
-          }
-          
-          Write-Host "Subconverter library built successfully"
+          cd libcore && make prebuild-windows 
 
       # Build libcore dynamic library
       - name: Build libcore (macOS)
@@ -211,19 +170,7 @@ jobs:
           CXX: ${{ github.workspace }}/zig-cxx.bat
         run: |
           cd libcore
-          
-          # Create build directory
-          if (-not (Test-Path "build")) {
-            New-Item -ItemType Directory -Path "build" -Force | Out-Null
-          }
-          
-          # Build with Go
-          go build -v -trimpath -buildmode=c-shared `
-            -tags "${{ env.GO_TAGS }}" `
-            -ldflags "-s -w" `
-            -o build/libcore.dll .
-          
-          Write-Host "libcore.dll built successfully"
+          make windows
 
       # Verify build output
       - name: Verify build output
