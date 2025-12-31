@@ -61,11 +61,11 @@ jobs:
           cache-dependency-path: libcore/go.sum
 
       # Windows: Install Zig as C/C++ compiler
-      - name: Install Zig (Windows)
-        if: matrix.platform == 'windows'
-        uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
+      # - name: Install Zig (Windows)
+      #   if: matrix.platform == 'windows'
+      #   uses: mlugg/setup-zig@v2
+      #   with:
+      #     version: ${{ env.ZIG_VERSION }}
 
       - name: Install pkg-config
         if: matrix.platform == 'windows'
@@ -73,42 +73,42 @@ jobs:
         run: |
           choco install pkgconfiglite -y
 
-      - name: Verify Zig installation (Windows)
-        if: matrix.platform == 'windows'
-        shell: pwsh
-        run: |
-          zig version
-          Write-Host "Zig will be used as C/C++ compiler for Windows build"
+      # - name: Verify Zig installation (Windows)
+      #   if: matrix.platform == 'windows'
+      #   shell: pwsh
+      #   run: |
+      #     zig version
+      #     Write-Host "Zig will be used as C/C++ compiler for Windows build"
 
-      - name: Create Zig wrapper scripts (Windows)
-        if: matrix.platform == 'windows'
-        shell: pwsh
-        run: |
-          # Create zig-cc.bat wrapper with target
-          @"
-          @echo off
-          zig cc -target ${{ matrix.zig_target }} %*
-          "@ | Out-File -FilePath zig-cc.bat -Encoding ascii
+      # - name: Create Zig wrapper scripts (Windows)
+      #   if: matrix.platform == 'windows'
+      #   shell: pwsh
+      #   run: |
+      #     # Create zig-cc.bat wrapper with target
+      #     @"
+      #     @echo off
+      #     zig cc -target ${{ matrix.zig_target }} %*
+      #     "@ | Out-File -FilePath zig-cc.bat -Encoding ascii
           
-          # Create zig-cxx.bat wrapper with target
-          @"
-          @echo off
-          zig c++ -target ${{ matrix.zig_target }} %*
-          "@ | Out-File -FilePath zig-cxx.bat -Encoding ascii
+      #     # Create zig-cxx.bat wrapper with target
+      #     @"
+      #     @echo off
+      #     zig c++ -target ${{ matrix.zig_target }} %*
+      #     "@ | Out-File -FilePath zig-cxx.bat -Encoding ascii
           
-          # Create zig-ar.bat wrapper
-          @"
-          @echo off
-          zig ar %*
-          "@ | Out-File -FilePath zig-ar.bat -Encoding ascii
+      #     # Create zig-ar.bat wrapper
+      #     @"
+      #     @echo off
+      #     zig ar %*
+      #     "@ | Out-File -FilePath zig-ar.bat -Encoding ascii
           
-          # Create zig-ranlib.bat wrapper (no-op for zig)
-          @"
-          @echo off
-          rem zig ar creates indexes automatically, ranlib is a no-op
-          "@ | Out-File -FilePath zig-ranlib.bat -Encoding ascii
+      #     # Create zig-ranlib.bat wrapper (no-op for zig)
+      #     @"
+      #     @echo off
+      #     rem zig ar creates indexes automatically, ranlib is a no-op
+      #     "@ | Out-File -FilePath zig-ranlib.bat -Encoding ascii
           
-          Write-Host "Created Zig wrapper scripts for target: ${{ matrix.zig_target }}"
+      #     Write-Host "Created Zig wrapper scripts for target: ${{ matrix.zig_target }}"
 
       - name: Install Ninja (Windows)
         if: matrix.platform == 'windows'
@@ -162,13 +162,6 @@ jobs:
 
       - name: Build libcore (Windows)
         if: matrix.platform == 'windows'
-        # shell: pwsh
-        env:
-          CGO_ENABLED: '1'
-          GOOS: windows
-          GOARCH: ${{ matrix.arch }}
-          CC: ${{ github.workspace }}/zig-cc.bat
-          CXX: ${{ github.workspace }}/zig-cxx.bat
         run: |
           cd libcore
           make windows
