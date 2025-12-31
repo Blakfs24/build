@@ -134,7 +134,7 @@ jobs:
         if: matrix.platform == 'macos'
         run: |
           if [ "${{ matrix.arch }}" == "amd64" ]; then
-            cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=x86_64"
+            cd libcore && make prebuild
           else
             cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
@@ -147,7 +147,7 @@ jobs:
         if: matrix.platform == 'windows'
         # shell: pwsh
         run: |
-          cd libcore && make prebuild SHELL=cmd
+          cd libcore && make prebuild
 
       # Build libcore dynamic library
       - name: Build libcore (macOS)
