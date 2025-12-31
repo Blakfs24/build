@@ -147,7 +147,7 @@ jobs:
         if: matrix.platform == 'windows'
         # shell: pwsh
         run: |
-          cd libcore && make zig-wrappers prebuild-windows SHELL=cmd USE_ZIG=1
+          cd libcore && make prebuild SHELL=cmd
 
       # Build libcore dynamic library
       - name: Build libcore (macOS)
