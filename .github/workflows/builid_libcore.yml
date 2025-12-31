@@ -120,7 +120,7 @@ jobs:
         if: matrix.platform == 'windows'
         with:
           update: true
-          install: base-devel git mingw-w64-${{ matrix.env }}-gcc mingw-w64-${{ matrix.env }}-cmake mingw-w64-${{ matrix.env }}-pcre2 patch
+          install: base-devel git mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-pcre2 patch
           msystem: MINGW64
           path-type: inherit
 
