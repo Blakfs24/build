@@ -115,6 +115,15 @@ jobs:
         shell: pwsh
         run: choco install ninja -y --no-progress
 
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        if: matrix.platform == 'windows'
+        with:
+          update: true
+          install: base-devel git mingw-w64-${{ matrix.env }}-gcc mingw-w64-${{ matrix.env }}-cmake mingw-w64-${{ matrix.env }}-pcre2 patch
+          msystem: ${{ matrix.msystem }}
+          path-type: inherit
+
       # Linux: Install build dependencies
       - name: Install build dependencies (Linux)
         if: matrix.platform == 'linux'
