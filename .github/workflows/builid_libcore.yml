@@ -121,7 +121,7 @@ jobs:
         with:
           update: true
           install: base-devel git mingw-w64-${{ matrix.env }}-gcc mingw-w64-${{ matrix.env }}-cmake mingw-w64-${{ matrix.env }}-pcre2 patch
-          msystem: ${{ matrix.msystem }}
+          msystem: MINGW64
           path-type: inherit
 
       # Linux: Install build dependencies
