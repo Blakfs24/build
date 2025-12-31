@@ -134,20 +134,20 @@ jobs:
         if: matrix.platform == 'macos'
         run: |
           if [ "${{ matrix.arch }}" == "amd64" ]; then
-            cd libcore && make prebuild
+            cd libcore && make prebuild-test prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64"
           else
-            cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
+            cd libcore && make prebuild-test prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
 
       - name: Build subconverter (Linux)
         if: matrix.platform == 'linux'
-        run: cd libcore && make prebuild
+        run: cd libcore && make prebuild-test prebuild
 
       - name: Build subconverter (Windows)
         if: matrix.platform == 'windows'
         # shell: pwsh
         run: |
-          cd libcore && make prebuild
+          cd libcore && make prebuild-test prebuild
 
       # Build libcore dynamic library
       - name: Build libcore (macOS)
