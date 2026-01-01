@@ -162,7 +162,7 @@ jobs:
       - name: make subconverter (widows)
         if: matrix.platform == 'windows'
         run: |
-          cd libcore && make prebuild-windows
+          cd libcore && make prebuild
           make ${{ matrix.platform }}
 
 
