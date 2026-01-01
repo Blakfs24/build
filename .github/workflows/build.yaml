@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    # branches: [ main ]
+    branches: [ main ]
     tags:
       - 'v*'
   workflow_dispatch:
@@ -144,6 +144,14 @@ jobs:
             cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
             make ${{ matrix.platform }} ARCH=arm64
           fi
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        if: matrix.platform == 'windows'
+        with:
+          update: true
+          install: base-devel git mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-pcre2 patch
+          msystem: MINGW64
+          path-type: inherit
 
       - name: make subconverter (linux)
         if: matrix.platform == 'linux'
@@ -154,7 +162,7 @@ jobs:
       - name: make subconverter (widows)
         if: matrix.platform == 'windows'
         run: |
-          cd libcore && make zig-wrappers prebuild-windows SHELL=cmd USE_ZIG=1
+          cd libcore && make prebuild-windows
           make ${{ matrix.platform }}
 
 
