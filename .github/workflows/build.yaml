@@ -192,3 +192,40 @@ jobs:
           name: artifact-${{ matrix.platform }}${{ matrix.arch && format('-{0}', matrix.arch) }}
           path: ./dist
           overwrite: true
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List downloaded artifacts
+        run: |
+          echo "=== Downloaded artifacts ==="
+          find artifacts -type f | head -100
+
+      - name: Generate release tag
+        id: tag
+        run: |
+          TAG="v0.0.0-pre.$(date +'%Y%m%d%H%M%S')-${GITHUB_RUN_NUMBER}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Generated tag: $TAG"
+
+      - name: Create Pre-Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Pre-Release ${{ steps.tag.outputs.tag }}
+          prerelease: true
+          generate_release_notes: false
+          body: |
+            🚧 **Pre-Release Build**
+
+            - **Trigger**: ${{ github.event_name }}
+            - **Ref**: ${{ github.event.client_payload.ref || 'refs/heads/dev-next' }}
+            - **Run**: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          files: artifacts/**/*
