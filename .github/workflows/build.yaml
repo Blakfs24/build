@@ -2,9 +2,10 @@ name: build
 
 on:
   push:
-    branches: [ main ]
     tags:
       - 'v*'
+  repository_dispatch:
+    types: [build-trigger]
   workflow_dispatch:
 env:
   IS_STABLE: ${{ !contains(github.ref, '-') }}
@@ -25,7 +26,7 @@ jobs:
             os: ubuntu-22.04
             arch: amd64
           - platform: macos
-            os: macos-latest
+            os: macos-14
             arch: amd64
           - platform: macos
             os: macos-latest
@@ -41,17 +42,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          repository: Blakfs24/singtools
-          ref: dev-next
-          token: ${{ secrets.ACCESS_TOKEN }}
           submodules: recursive
 
       - name: Install Inno Setup 6
         if: matrix.platform == 'windows'
         shell: pwsh
-        run: |
-          choco install -y innosetup --no-progress
-          choco install -y pkgconfiglite --no-progress
+        run: choco install -y innosetup --no-progress
+
+      - name: Install pkg-config
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: choco install -y pkgconfiglite --no-progress
 
       - name: Verify Inno Setup installation
         if: matrix.platform == 'windows'
@@ -120,51 +121,9 @@ jobs:
 
       - name: Install Zig
         if: matrix.platform == 'windows'
-        uses: mlugg/setup-zig@v2
+        uses: goto-bus-stop/setup-zig@v2
         with:
-          version: '0.15.2'
-
-      - name: make subconverter (macOS)
-        if: matrix.platform == 'macos'
-        run: |
-          if [ "${{ matrix.arch }}" == "amd64" ]; then
-            cd libcore && git clone https://github.com/Micha7delHowerk3ihnr/subconverter.git && \
-            cd subconverter && cmake -B build_lib \
-                -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-                -DBUILD_STATIC_LIBRARY=ON \
-                -DBUILD_FULL_STATIC=ON \
-                -DFORCE_FETCH_DEPS=ON \
-                -DCMAKE_POLICY_VERSION_MINIMUM=3.14 \
-                -DAUTO_FETCH_DEPS=ON && \
-            cmake --build build_lib --config Release --target subconverter_static_full --parallel $(sysctl -n hw.ncpu)
-            cp build_lib/libsubconverter_static_full.a ../internal/converter/libsubconverter.a
-            cd ../ && make ${{ matrix.platform }} ARCH=amd64
-          else
-            cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
-            make ${{ matrix.platform }} ARCH=arm64
-          fi
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
-        if: matrix.platform == 'windows'
-        with:
-          update: true
-          install: base-devel git mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-pcre2 patch
-          msystem: MINGW64
-          path-type: inherit
-
-      - name: make subconverter (linux)
-        if: matrix.platform == 'linux'
-        run: |
-          cd libcore && make prebuild
-          make ${{ matrix.platform }}
-
-      - name: make subconverter (widows)
-        if: matrix.platform == 'windows'
-        run: |
-          cd libcore && make prebuild
-          make ${{ matrix.platform }}
-
+          version: '0.13.0'
 
       - name: Setup Flutter Master
         if: startsWith(matrix.os, 'windows-11-arm') || startsWith(matrix.os, 'ubuntu-24.04-arm')
@@ -185,8 +144,28 @@ jobs:
       - name: Get Flutter Dependency
         run: flutter pub get
 
+      - name: make subconverter (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          if [ "${{ matrix.arch }}" == "amd64" ]; then
+            cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=x86_64"
+          else
+            cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
+          fi
+
+      - name: make subconverter (Windows)
+        if: matrix.platform != 'macos'
+        run: |
+          cd libcore && make prebuild
+
+      - name: make libcore
+        run: |
+          cd libcore && make ${{ matrix.platform }}
+
       - name: Setup
-        run: dart setup.dart ${{ matrix.platform }} ${{ matrix.arch && format('--arch {0}', matrix.arch) }} ${{ env.IS_STABLE == 'true' && '--env stable' || '' }}
+        run: |
+          dart run slang
+          dart setup.dart ${{ matrix.platform }} ${{ matrix.arch && format('--arch {0}', matrix.arch) }} ${{ env.IS_STABLE == 'true' && '--env stable' || '' }}
 
       - name: Verify Windows build output
         if: matrix.platform == 'windows'
@@ -221,11 +200,8 @@ jobs:
         uses: actions/checkout@v4
         if: ${{ env.IS_STABLE == 'true' }}
         with:
-          repository: Blakfs24/singtools
-          ref: dev-next
-          token: ${{ secrets.ACCESS_TOKEN }}
           fetch-depth: 0
-          
+          ref: refs/heads/main
       - name: Generate
         if: ${{ env.IS_STABLE == 'true' }}
         run: |
@@ -286,9 +262,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          repository: Blakfs24/singtools
-          ref: dev-next
-          token: ${{ secrets.ACCESS_TOKEN }}
           fetch-depth: 0
 
       - name: Download artifacts
@@ -336,4 +309,4 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref, '-') }}
         env:
-          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
