@@ -203,10 +203,26 @@ jobs:
         with:
           path: artifacts
 
-      - name: List downloaded artifacts
+      - name: Prepare release assets
         run: |
-          echo "=== Downloaded artifacts ==="
-          find artifacts -type f | head -100
+          mkdir -p release_assets
+          # Each artifact dir is named like "artifact-macos-arm64", "artifact-linux-amd64", etc.
+          for dir in artifacts/artifact-*/; do
+            # Extract platform-arch suffix, e.g. "macos-arm64"
+            suffix=$(basename "$dir" | sed 's/^artifact-//')
+            for file in "$dir"*; do
+              [ -f "$file" ] || continue
+              filename=$(basename "$file")
+              name="${filename%.*}"
+              ext="${filename##*.}"
+              # Append arch to filename: singtools-0.1.1-macos.dmg -> singtools-0.1.1-macos-arm64.dmg
+              new_name="${name}-${suffix}.${ext}"
+              cp "$file" "release_assets/${new_name}"
+              echo "Copied: $file -> release_assets/${new_name}"
+            done
+          done
+          echo "=== Release assets ==="
+          ls -lh release_assets/
 
       - name: Generate release tag
         id: tag
@@ -228,4 +244,4 @@ jobs:
             - **Trigger**: ${{ github.event_name }}
             - **Ref**: ${{ github.event.client_payload.ref || 'refs/heads/dev-next' }}
             - **Run**: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          files: artifacts/**/*
+          files: release_assets/*
