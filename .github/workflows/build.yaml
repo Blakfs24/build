@@ -154,12 +154,13 @@ jobs:
             cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
 
-      - name: make subconverter (Windows)
-        if: matrix.platform != 'macos'
+      - name: make subconverter (other)
+        if: matrix.platform != 'macos' && matrix.platform != 'android'
         run: |
           cd libcore && make prebuild
 
       - name: make libcore
+        if: matrix.platform != 'android'
         run: |
           cd libcore && make ${{ matrix.platform }}
 
