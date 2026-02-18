@@ -17,6 +17,13 @@ jobs:
         include:
           - platform: android
             os: ubuntu-latest
+            arch: arm
+          - platform: android
+            os: ubuntu-latest
+            arch: arm64
+          - platform: android
+            os: ubuntu-latest
+            arch: amd64
           - platform: windows
             os: windows-latest
             arch: amd64
@@ -159,10 +166,39 @@ jobs:
         run: |
           cd libcore && make prebuild
 
+      - name: Setup Android NDK
+        if: startsWith(matrix.platform, 'android')
+        run: |
+          NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK:-$ANDROID_SDK_ROOT/ndk-bundle}}"
+          echo "ANDROID_NDK=$NDK" >> $GITHUB_ENV
+          NDK_BIN=$(ls -d $NDK/toolchains/llvm/prebuilt/*/bin | head -1)
+          case "${{ matrix.arch }}" in
+            arm)   CC_PREFIX="armv7a-linux-androideabi21" ABI="armeabi-v7a" ;;
+            arm64) CC_PREFIX="aarch64-linux-android21"    ABI="arm64-v8a"  ;;
+            amd64) CC_PREFIX="x86_64-linux-android21"     ABI="x86_64"     ;;
+          esac
+          echo "NDK_CC=$NDK_BIN/${CC_PREFIX}-clang"   >> $GITHUB_ENV
+          echo "NDK_CXX=$NDK_BIN/${CC_PREFIX}-clang++" >> $GITHUB_ENV
+          echo "ANDROID_ABI=$ABI" >> $GITHUB_ENV
+
+      - name: make subconverter (Android)
+        if: startsWith(matrix.platform, 'android')
+        run: |
+          cd libcore && make prebuild \
+            CC="$NDK_CC" CXX="$NDK_CXX" \
+            CMAKE_ARGS="-DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake -DANDROID_ABI=$ANDROID_ABI -DANDROID_PLATFORM=android-21"
+
       - name: make libcore
         if: matrix.platform != 'android'
         run: |
           cd libcore && make ${{ matrix.platform }}
+
+      - name: make libcore (Android)
+        if: startsWith(matrix.platform, 'android')
+        run: |
+          make -C libcore android ARCH=${{ matrix.arch }} CC="$NDK_CC" CXX="$NDK_CXX"
+          mkdir -p android/app/src/main/jniLibs/$ANDROID_ABI
+          cp libcore/build/libcore.so android/app/src/main/jniLibs/$ANDROID_ABI/libcore.so
 
       - name: Setup
         run: |
