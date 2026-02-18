@@ -15,9 +15,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: android
-            os: ubuntu-latest
-            arch: arm
+          # - platform: android
+          #   os: ubuntu-latest
+          #   arch: arm
           - platform: android
             os: ubuntu-latest
             arch: arm64
