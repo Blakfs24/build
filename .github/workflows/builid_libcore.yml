@@ -1,222 +1,250 @@
-name: Build Libcore
+name: build (public)
 
 on:
+  repository_dispatch:
+    types: [build-trigger]
   workflow_dispatch:
-  push:
-    branches: [ main ]
-    paths:
-      - 'libcore/**'
-      - '.github/workflows/build_libcore.yml'
 
 env:
-  GO_VERSION: '1.25.x'
-  GO_TAGS: 'with_quic with_dhcp with_wireguard with_utls with_acme with_gvisor with_clash_api with_tailscale'
-  ZIG_VERSION: '0.15.2'
+  IS_STABLE: false
 
 jobs:
   build:
-    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux builds
-          - platform: linux
-            os: ubuntu-22.04
-            arch: amd64
-          - platform: linux
-            os: ubuntu-24.04-arm
-            arch: arm64
-          # macOS builds
-          - platform: macos
-            os: macos-latest
-            arch: amd64
-          - platform: macos
-            os: macos-latest
-            arch: arm64
-          # Windows builds - use Zig as C/C++ compiler
+          - platform: android
+            os: ubuntu-latest
           - platform: windows
             os: windows-latest
             arch: amd64
-            zig_target: x86_64-windows-gnu
-          - platform: windows
-            os: windows-11-arm
+          - platform: linux
+            os: ubuntu-22.04
+            arch: amd64
+          - platform: macos
+            os: macos-15-intel
+            arch: amd64
+          - platform: macos
+            os: macos-latest
             arch: arm64
-            zig_target: aarch64-windows-gnu
+          # - platform: windows
+          #   os: windows-11-arm
+          #   arch: arm64
+          - platform: linux
+            os: ubuntu-24.04-arm
+            arch: arm64
 
     steps:
-      - name: Checkout
+      - name: Checkout private repo
         uses: actions/checkout@v4
         with:
-          repository: Blakfs24/singtools
-          ref: dev-next
+          repository: ${{ secrets.PRIVATE_REPO }}
           token: ${{ secrets.ACCESS_TOKEN }}
+          ref: ${{ github.event.client_payload.ref || 'refs/heads/dev-next' }}
           submodules: recursive
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: libcore/go.sum
-
-      # Windows: Install Zig as C/C++ compiler
-      # - name: Install Zig (Windows)
-      #   if: matrix.platform == 'windows'
-      #   uses: mlugg/setup-zig@v2
-      #   with:
-      #     version: ${{ env.ZIG_VERSION }}
+      - name: Install Inno Setup 6
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: choco install -y innosetup --no-progress
 
       - name: Install pkg-config
         if: matrix.platform == 'windows'
         shell: pwsh
-        run: |
-          choco install pkgconfiglite -y
+        run: choco install -y pkgconfiglite --no-progress
 
-      # - name: Verify Zig installation (Windows)
-      #   if: matrix.platform == 'windows'
-      #   shell: pwsh
-      #   run: |
-      #     zig version
-      #     Write-Host "Zig will be used as C/C++ compiler for Windows build"
-
-      # - name: Create Zig wrapper scripts (Windows)
-      #   if: matrix.platform == 'windows'
-      #   shell: pwsh
-      #   run: |
-      #     # Create zig-cc.bat wrapper with target
-      #     @"
-      #     @echo off
-      #     zig cc -target ${{ matrix.zig_target }} %*
-      #     "@ | Out-File -FilePath zig-cc.bat -Encoding ascii
-          
-      #     # Create zig-cxx.bat wrapper with target
-      #     @"
-      #     @echo off
-      #     zig c++ -target ${{ matrix.zig_target }} %*
-      #     "@ | Out-File -FilePath zig-cxx.bat -Encoding ascii
-          
-      #     # Create zig-ar.bat wrapper
-      #     @"
-      #     @echo off
-      #     zig ar %*
-      #     "@ | Out-File -FilePath zig-ar.bat -Encoding ascii
-          
-      #     # Create zig-ranlib.bat wrapper (no-op for zig)
-      #     @"
-      #     @echo off
-      #     rem zig ar creates indexes automatically, ranlib is a no-op
-      #     "@ | Out-File -FilePath zig-ranlib.bat -Encoding ascii
-          
-      #     Write-Host "Created Zig wrapper scripts for target: ${{ matrix.zig_target }}"
-
-      - name: Install Ninja (Windows)
+      - name: Verify Inno Setup installation
         if: matrix.platform == 'windows'
         shell: pwsh
-        run: choco install ninja -y --no-progress
+        run: |
+          $isccPath = Get-Command iscc -ErrorAction SilentlyContinue
+          if ($isccPath) {
+            Write-Host "Inno Setup Compiler found at: $($isccPath.Source)"
+          } else {
+            Write-Host "ERROR: Inno Setup Compiler (iscc) not found in PATH"
+            Write-Host "Checking default installation location..."
+            $defaultPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+            if (Test-Path $defaultPath) {
+              Write-Host "Found at default location: $defaultPath"
+              $innoDir = Split-Path $defaultPath
+              Add-Content $env:GITHUB_PATH $innoDir
+              Write-Host "Added to PATH: $innoDir"
+            } else {
+              Write-Host "ERROR: Inno Setup not found at default location either"
+              exit 1
+            }
+          }
 
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
-        if: matrix.platform == 'windows'
+      - name: Install llvm-mingw toolchain (ARM64)
+        if: matrix.platform == 'windows' && matrix.arch == 'arm64'
+        shell: pwsh
+        run: |
+          $version = '20241217'
+          # On ARM64 Windows runner, use ARM64-native llvm-mingw toolchain
+          $zipUrl = "https://github.com/mstorsjo/llvm-mingw/releases/download/$version/llvm-mingw-$version-ucrt-aarch64.zip"
+          $downloadPath = Join-Path $env:RUNNER_TEMP "llvm-mingw.zip"
+          Write-Host "Downloading llvm-mingw from: $zipUrl"
+          Invoke-WebRequest -Uri $zipUrl -OutFile $downloadPath
+          $extractPath = Join-Path $env:RUNNER_TEMP "llvm-mingw"
+          New-Item -ItemType Directory -Path $extractPath -Force | Out-Null
+          Expand-Archive -Path $downloadPath -DestinationPath $extractPath -Force
+          $toolchainDir = Get-ChildItem $extractPath | Where-Object { $_.PSIsContainer } | Select-Object -First 1
+          if (-not $toolchainDir) {
+            throw "Failed to locate extracted llvm-mingw toolchain directory"
+          }
+          $binPath = Join-Path $toolchainDir.FullName 'bin'
+          Add-Content $env:GITHUB_PATH $binPath
+          Write-Host "Added to PATH: $binPath"
+          # Verify the ARM64 cross-compiler exists
+          $ccPath = Join-Path $binPath 'aarch64-w64-mingw32-gcc.exe'
+          if (-not (Test-Path $ccPath)) {
+            throw "Expected compiler not found at $ccPath"
+          }
+          Write-Host "Found ARM64 compiler: $ccPath"
+          Add-Content $env:GITHUB_ENV "CC_WINDOWS_ARM64=$ccPath"
+
+      - name: Setup Android Signing
+        if: startsWith(matrix.platform,'android')
+        run: |
+          printf '%s' "${{ secrets.KEYSTORE }}" | base64 --decode > android/app/keystore.jks
+          echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> android/local.properties
+          echo "storePassword=${{ secrets.STORE_PASSWORD }}" >> android/local.properties
+          echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> android/local.properties
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          update: true
-          install: base-devel git mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-pcre2 patch
-          msystem: MINGW64
-          path-type: inherit
+          go-version: '1.25.4'
+          cache-dependency-path: |
+            libcore/go.sum
 
-      # Linux: Install build dependencies
-      - name: Install build dependencies (Linux)
-        if: matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build
+      - name: Install Zig
+        if: matrix.platform == 'windows'
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: '0.13.0'
 
-      # macOS: Ensure Xcode command line tools
-      - name: Setup Xcode (macOS)
-        if: matrix.platform == 'macos'
-        run: |
-          xcode-select --print-path
-          clang --version
+      - name: Setup Flutter Master
+        if: startsWith(matrix.os, 'windows-11-arm') || startsWith(matrix.os, 'ubuntu-24.04-arm')
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'master'
+          cache: true
+      - name: Setup Flutter
+        if: ${{ !(startsWith(matrix.os, 'windows-11-arm') || startsWith(matrix.os, 'ubuntu-24.04-arm')) }}
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
 
-      # Build subconverter static library
-      - name: Build subconverter (macOS)
+      - name: Update build number
+        run: dart tool/update_build_number.dart
+
+      - name: Get Flutter Dependency
+        run: flutter pub get
+
+      - name: make subconverter (macOS)
         if: matrix.platform == 'macos'
         run: |
           if [ "${{ matrix.arch }}" == "amd64" ]; then
-            cd libcore && make prebuild-test prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64"
+            cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=x86_64"
           else
-            cd libcore && make prebuild-test prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
+            cd libcore && make prebuild CMAKE_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
 
-      - name: Build subconverter (Linux)
-        if: matrix.platform == 'linux'
-        run: cd libcore && make prebuild-test prebuild
+      - name: make subconverter (other)
+        if: matrix.platform != 'macos' && matrix.platform != 'android'
+        run: |
+          cd libcore && make prebuild
 
-      - name: Build subconverter (Windows)
+      - name: make libcore
+        if: matrix.platform != 'android'
+        run: |
+          cd libcore && make ${{ matrix.platform }}
+
+      - name: Setup
+        run: |
+          dart run slang
+          dart setup.dart ${{ matrix.platform }} ${{ matrix.arch && format('--arch {0}', matrix.arch) }} ${{ env.IS_STABLE == 'true' && '--env stable' || '' }}
+
+      - name: Verify Windows build output
         if: matrix.platform == 'windows'
-        # shell: pwsh
+        shell: pwsh
         run: |
-          cd libcore && make prebuild-test prebuild
+          Write-Host "=== Checking dist directory contents ==="
+          Get-ChildItem -Path ./dist -Recurse | Select-Object FullName, Length, LastWriteTime
+          Write-Host ""
+          Write-Host "=== Checking for .exe installer files ==="
+          $exeFiles = Get-ChildItem -Path ./dist -Recurse -Filter "*.exe"
+          if ($exeFiles) {
+            foreach ($file in $exeFiles) {
+              Write-Host "Found: $($file.FullName) ($([math]::Round($file.Length / 1MB, 2)) MB)"
+            }
+          } else {
+            Write-Host "WARNING: No .exe files found in dist directory!"
+            exit 1
+          }
 
-      # Build libcore dynamic library
-      - name: Build libcore (macOS)
-        if: matrix.platform == 'macos'
-        run: |
-          cd libcore && make macos ARCH=${{ matrix.arch }}
-
-      - name: Build libcore (Linux)
-        if: matrix.platform == 'linux'
-        run: |
-          cd libcore && make linux ARCH=${{ matrix.arch }}
-
-      - name: Build libcore (Windows)
-        if: matrix.platform == 'windows'
-        run: |
-          cd libcore
-          make windows
-
-      # Verify build output
-      - name: Verify build output
-        shell: bash
-        run: |
-          echo "=== Build output ==="
-          ls -lah libcore/build/ || echo "No build directory found"
-          
-          case "${{ matrix.platform }}" in
-            windows)
-              if [ -f "libcore/build/libcore.dll" ]; then
-                echo "✓ libcore.dll created successfully"
-                file libcore/build/libcore.dll
-              else
-                echo "✗ libcore.dll not found!"
-                exit 1
-              fi
-              ;;
-            linux)
-              if [ -f "libcore/build/libcore.so" ]; then
-                echo "✓ libcore.so created successfully"
-                file libcore/build/libcore.so
-              else
-                echo "✗ libcore.so not found!"
-                exit 1
-              fi
-              ;;
-            macos)
-              if [ -f "libcore/build/libcore.dylib" ]; then
-                echo "✓ libcore.dylib created successfully"
-                file libcore/build/libcore.dylib
-              else
-                echo "✗ libcore.dylib not found!"
-                exit 1
-              fi
-              ;;
-          esac
-
-      # Upload artifacts
-      - name: Upload libcore artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: libcore-${{ matrix.platform }}-${{ matrix.arch }}
-          path: |
-            libcore/build/libcore.*
-          if-no-files-found: error
+          name: artifact-${{ matrix.platform }}${{ matrix.arch && format('-{0}', matrix.arch) }}
+          path: ./dist
+          overwrite: true
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Delete old pre-release
+        run: gh release delete pre-release --cleanup-tag -y 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release_assets
+          for dir in artifacts/*; do
+            if [ -d "$dir" ]; then
+              suffix=$(basename "$dir" | sed 's/^artifact-//')
+              cd "$dir"
+              for file in *; do
+                if [ -f "$file" ]; then
+                  name="${file%.*}"
+                  ext="${file##*.}"
+                  new_name="${name}-${suffix}.${ext}"
+                  cp "$file" "../../release_assets/${new_name}"
+                  echo "Copied: $file -> release_assets/${new_name}"
+                fi
+              done
+              cd ../..
+            fi
+          done
+          echo "=== Release assets ==="
+          ls -lh release_assets/
+
+      - name: Create Pre-Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: pre-release
+          name: Pre-Release
+          prerelease: true
+          generate_release_notes: false
+          body: |
+            🚧 **Pre-Release Build**
+
+            - **Trigger**: ${{ github.event_name }}
+            - **Ref**: ${{ github.event.client_payload.ref || 'refs/heads/dev-next' }}
+            - **Run**: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          files: release_assets/*
