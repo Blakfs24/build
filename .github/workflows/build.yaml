@@ -186,7 +186,7 @@ jobs:
         run: |
           cd libcore && make prebuild \
             CC="$NDK_CC" CXX="$NDK_CXX" \
-            CMAKE_ARGS="-DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake -DANDROID_ABI=$ANDROID_ABI -DANDROID_PLATFORM=android-21"
+            CMAKE_ARGS="-DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake -DANDROID_ABI=$ANDROID_ABI -DANDROID_PLATFORM=android-21 -DANDROID_STL=c++_static"
 
       - name: make libcore
         if: matrix.platform != 'android'
