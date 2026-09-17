@@ -1,0 +1,190 @@
+name: Package private source
+
+on:
+  workflow_call:
+    inputs:
+      source_ref:
+        type: string
+        required: true
+      app_environment:
+        type: string
+        default: release
+      require_android_signing:
+        type: boolean
+        default: false
+    secrets:
+      PRIVATE_REPO:
+        required: true
+      ACCESS_TOKEN:
+        required: true
+      KEYSTORE:
+        required: false
+      KEY_ALIAS:
+        required: false
+      STORE_PASSWORD:
+        required: false
+      KEY_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: '3.38.10'
+
+jobs:
+  package:
+    name: ${{ matrix.target }} (${{ matrix.backend }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      KEYSTORE_B64: ${{ secrets.KEYSTORE }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {target: android-arm, platform: android, arch: arm, backend: local, os: ubuntu-22.04}
+          - {target: android-arm64, platform: android, arch: arm64, backend: local, os: ubuntu-22.04}
+          - {target: android-amd64, platform: android, arch: amd64, backend: local, os: ubuntu-22.04}
+          - {target: windows-amd64, platform: windows, arch: amd64, backend: local, os: windows-2022}
+          - {target: linux-amd64, platform: linux, arch: amd64, backend: local, os: ubuntu-22.04}
+          - {target: macos-amd64, platform: macos, arch: amd64, backend: local, os: macos-15-intel}
+          - {target: macos-arm64, platform: macos, arch: arm64, backend: local, os: macos-15}
+
+    steps:
+      - name: Configure Windows build paths
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          $workspace = [System.IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd('\')
+          $parent = Split-Path -Parent $workspace
+          $leaf = Split-Path -Leaf $workspace
+          subst S: "$parent"
+          "SHORT_WORKSPACE=S:/$leaf" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PRIVATE_REPO }}
+          token: ${{ secrets.ACCESS_TOKEN }}
+          ref: ${{ inputs.source_ref }}
+          submodules: recursive
+
+      - name: Resolve Go version
+        id: go
+        shell: bash
+        run: |
+          version="$(awk '$1 == "go" { print $2; exit }' libcore/go.mod)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+          cache-dependency-path: libcore/go.sum
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2.21.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Setup Java
+        if: matrix.platform == 'android'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Setup Android SDK
+        if: matrix.platform == 'android'
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Select Android NDK
+        if: matrix.platform == 'android'
+        shell: bash
+        run: |
+          ndk="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}}"
+          if [ -z "$ndk" ] || [ ! -d "$ndk" ]; then
+            ndk="$(find "$ANDROID_SDK_ROOT/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+          fi
+          test -d "$ndk"
+          echo "ANDROID_NDK=$ndk" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
+
+      - name: Configure Android signing when available
+        if: matrix.platform == 'android' && env.KEYSTORE_B64 != ''
+        shell: bash
+        env:
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          test -n "$KEY_ALIAS"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_PASSWORD"
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > android/app/keystore.jks
+          {
+            echo "keyAlias=$KEY_ALIAS"
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyPassword=$KEY_PASSWORD"
+          } >> android/local.properties
+
+      - name: Require Android signing
+        if: matrix.platform == 'android' && inputs.require_android_signing
+        shell: bash
+        env:
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_B64"
+          test -n "$KEY_ALIAS"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_PASSWORD"
+
+      - name: Install Windows toolchain
+        if: matrix.platform == 'windows' && matrix.arch == 'amd64'
+        shell: pwsh
+        run: |
+          choco install -y --no-progress make mingw cmake ninja pkgconfiglite innosetup
+          Add-Content $env:GITHUB_ENV 'CC_WINDOWS_AMD64=gcc'
+          Add-Content $env:GITHUB_ENV 'CXX_WINDOWS_AMD64=g++'
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: make setup-linux
+
+      - name: Resolve Flutter dependencies
+        shell: bash
+        run: flutter pub get --enforce-lockfile
+
+      - name: Package exact source revision
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then cd "$SHORT_WORKSPACE"; fi
+          dart ./setup.dart ${{ matrix.platform }} \
+            --arch ${{ matrix.arch }} \
+            --env ${{ inputs.app_environment }} \
+            --native-backend ${{ matrix.backend }}
+
+      - name: Upload package and native manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.target }}-${{ matrix.backend }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            dist/**/*.apk
+            dist/**/*.deb
+            dist/**/*.rpm
+            dist/**/*.exe
+            dist/**/*.dmg
+            dist/native/**
