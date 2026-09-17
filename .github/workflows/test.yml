@@ -1,0 +1,120 @@
+name: Test private source contracts
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Private repository branch, tag, or commit
+        type: string
+        required: true
+        default: dev-next
+  workflow_call:
+    inputs:
+      source_ref:
+        type: string
+        required: true
+    outputs:
+      source_sha:
+        description: Exact private source commit used by all test jobs
+        value: ${{ jobs.resolve.outputs.source_sha }}
+    secrets:
+      PRIVATE_REPO:
+        required: true
+      ACCESS_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Pin private source revision
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - name: Checkout requested private source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PRIVATE_REPO }}
+          token: ${{ secrets.ACCESS_TOKEN }}
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+      - name: Resolve immutable commit
+        id: source
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  flutter:
+    name: Flutter behavior and manifest contracts
+    needs: resolve
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout pinned private source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PRIVATE_REPO }}
+          token: ${{ secrets.ACCESS_TOKEN }}
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          persist-credentials: false
+      - uses: subosito/flutter-action@v2.21.0
+        with:
+          flutter-version: '3.38.10'
+          channel: stable
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      - run: flutter test --coverage
+      - name: Test manifest rejection and artifact selection
+        run: |
+          test -f test/native/manifest_contract_test.py
+          python3 -m unittest discover -s test/native -p '*_test.py'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: flutter-coverage
+          path: coverage/lcov.info
+          if-no-files-found: warn
+
+  native:
+    name: Native contracts (${{ matrix.os }})
+    needs: resolve
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-15, windows-2022]
+    steps:
+      - name: Configure Windows checkout paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: git config --global core.longpaths true
+      - name: Checkout pinned private source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PRIVATE_REPO }}
+          token: ${{ secrets.ACCESS_TOKEN }}
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: libcore/go.mod
+          cache-dependency-path: libcore/go.sum
+      - name: Test native contracts with race detection
+        working-directory: libcore
+        shell: bash
+        run: |
+          tags="$(sed -n 's/^GO_TAGS ?= //p' Makefile)"
+          test -n "$tags"
+          # GO_TAGS includes badlinkname; match the source Makefile linker contract.
+          # Serenity instantiates sing/common.Dup in its template package; its
+          # uintptr conversion trips checkptr under -race. Keep race enabled.
+          go test -tags "$tags" -ldflags=-checklinkname=0 -gcflags=github.com/sagernet/serenity/template=-d=checkptr=0 -race -timeout 10m -coverprofile=coverage.out ./...
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-coverage-${{ matrix.os }}
+          path: libcore/coverage.out
+          if-no-files-found: warn
