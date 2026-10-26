@@ -55,12 +55,7 @@ jobs:
               cp "$file" "release-assets/${stem}-${suffix}.${extension}"
             done < <(find "$directory" -type f ! -path '*/native/*' \( -name '*.apk' -o -name '*.deb' -o -name '*.rpm' -o -name '*.exe' -o -name '*.dmg' \))
           done
-          while IFS= read -r manifest; do
-            target="$(jq -r '.target' "$manifest")"
-            profile="$(jq -r '.profile' "$manifest")"
-            test -n "$target"
-            cp "$manifest" "release-assets/${target}-${profile}-manifest.json"
-          done < <(find dist -path '*/native/*/*/manifest.json' -type f)
+          test -n "$(find release-assets -type f -print -quit)"
 
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
@@ -71,3 +66,4 @@ jobs:
             Source revision: `${{ needs.packages.outputs.source_sha }}`
             Build run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           files: release-assets/*
+          fail_on_unmatched_files: true

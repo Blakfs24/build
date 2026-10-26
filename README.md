@@ -13,6 +13,13 @@ Both release workflows record this resolved SHA in the release body.
 The Go toolchain version is read from the checked-out source's
 `libcore/go.mod`; there is no second dependency lock file in this repository.
 
+Android jobs explicitly install the minimum platform (at least API 24), plus the
+compile SDK and NDK declared by the selected Flutter SDK. The target native API
+comes from the checked-out source's `native/targets.json`; its Clang and Clang++
+executables must exist before building. Jobs no longer select whichever NDK
+happens to be newest on the runner. Raising the minimum runtime to Android 7.0
+does not lower the compile SDK required by Flutter.
+
 - `build.yaml` handles `build-trigger` dispatches and replaces the public
   `pre-release` assets.
 - `release.yml` handles `release-trigger` dispatches and publishes the matching
@@ -27,6 +34,23 @@ The Go toolchain version is read from the checked-out source's
 - `package.yml` is the shared private-source packaging matrix. It waits for every
   test job to pass before starting the build matrix; a failure prevents packaging
   and the dependent release publication.
+
+Release downloads contain application installers only. Native manifests remain
+in the Actions artifacts for diagnostics and are not attached to releases.
+
+Pre-release runs share one concurrency group and replace the entire existing
+release, including its notes, assets, and tag. Cleanup errors stop publication;
+only an absent release or tag is ignored. The fixed `pre-release` URL is kept.
+Its tag points to a fresh commit with the public workflow revision's unchanged
+tree, so its date reflects publication rather than an old workflow commit. No
+branch is changed. This refreshes its position in GitHub's chronological release
+list; GitHub does not provide permanent pinning or allow prereleases to be marked
+as the latest stable release.
+
+All pre-release packages use the same `YYYYMMDD` build number, before packaging 
+(for example, `0.1.2+20261026`). The version override is applied only in the 
+build checkout; stable releases keep the source version. The release body records 
+both the build date and the exact source SHA.
 
 The selected source revision must include the test suites, including
 `test/native/manifest_contract_test.py`. Older source revisions lacking that

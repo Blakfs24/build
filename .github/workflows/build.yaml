@@ -15,21 +15,34 @@ permissions:
   contents: write
 
 concurrency:
-  group: public-build-${{ github.event.client_payload.sha || inputs.source_ref }}
-  cancel-in-progress: true
+  group: public-pre-release
+  cancel-in-progress: false
 
 jobs:
+  metadata:
+    name: Resolve pre-release build date
+    runs-on: ubuntu-latest
+    outputs:
+      build_number: ${{ steps.date.outputs.build_number }}
+    steps:
+      - name: Use the current date in Shanghai
+        id: date
+        shell: bash
+        run: echo "build_number=$(TZ=Asia/Shanghai date +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
   packages:
+    needs: metadata
     uses: ./.github/workflows/package.yml
     with:
       source_ref: ${{ github.event.client_payload.sha || inputs.source_ref }}
       app_environment: release
       require_android_signing: false
+      build_number: ${{ needs.metadata.outputs.build_number }}
     secrets: inherit
 
   publish:
     name: Update public pre-release
-    needs: packages
+    needs: [metadata, packages]
     runs-on: ubuntu-latest
     steps:
       - name: Download packages
@@ -52,17 +65,56 @@ jobs:
               cp "$file" "release-assets/${stem}-${suffix}.${extension}"
             done < <(find "$directory" -type f ! -path '*/native/*' \( -name '*.apk' -o -name '*.deb' -o -name '*.rpm' -o -name '*.exe' -o -name '*.dmg' \))
           done
-          while IFS= read -r manifest; do
-            target="$(jq -r '.target' "$manifest")"
-            profile="$(jq -r '.profile' "$manifest")"
-            test -n "$target"
-            cp "$manifest" "release-assets/${target}-${profile}-manifest.json"
-          done < <(find dist -path '*/native/*/*/manifest.json' -type f)
+          test -n "$(find release-assets -type f -print -quit)"
 
-      - name: Replace pre-release
+      - name: Remove old pre-release and refresh its tag
+        uses: actions/github-script@v7
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release delete pre-release --cleanup-tag --yes 2>/dev/null || true
+          SOURCE_SHA: ${{ needs.packages.outputs.source_sha }}
+          BUILD_NUMBER: ${{ needs.metadata.outputs.build_number }}
+        with:
+          script: |
+            const repo = context.repo;
+            const tag = 'pre-release';
+            // Only a missing resource is safe to ignore. Auth/network errors must stop publication.
+            async function findOrNull(request) {
+              try {
+                return (await request()).data;
+              } catch (error) {
+                if (error.status === 404) return null;
+                throw error;
+              }
+            }
+            const release = await findOrNull(() =>
+              github.rest.repos.getReleaseByTag({ ...repo, tag }));
+            if (release) {
+              await github.rest.repos.deleteRelease({ ...repo, release_id: release.id });
+            }
+            const ref = `tags/${tag}`;
+            const existingTag = await findOrNull(() =>
+              github.rest.git.getRef({ ...repo, ref }));
+            if (existingTag) {
+              await github.rest.git.deleteRef({ ...repo, ref });
+            }
+            // GitHub sorts releases using tag/commit dates. A fresh public-only
+            // snapshot gives this build a current date without changing any branch.
+            const { data: base } = await github.rest.git.getCommit({
+              ...repo, commit_sha: context.sha,
+            });
+            const identity = {
+              name: 'github-actions[bot]',
+              email: '41898282+github-actions[bot]@users.noreply.github.com',
+              date: new Date().toISOString(),
+            };
+            const { data: commit } = await github.rest.git.createCommit({
+              ...repo,
+              message: `Pre-release ${process.env.BUILD_NUMBER}\n\nSource revision: ${process.env.SOURCE_SHA}\nBuild run: ${context.runId}`,
+              tree: base.tree.sha,
+              parents: [base.sha],
+              author: identity,
+              committer: identity,
+            });
+            await github.rest.git.createRef({ ...repo, ref: `refs/${ref}`, sha: commit.sha });
 
       - name: Publish pre-release
         uses: softprops/action-gh-release@v2
@@ -70,8 +122,11 @@ jobs:
           tag_name: pre-release
           name: Pre-Release
           prerelease: true
+          make_latest: false
           generate_release_notes: false
           body: |
+            Build date (Asia/Shanghai): `${{ needs.metadata.outputs.build_number }}`
             Source revision: `${{ needs.packages.outputs.source_sha }}`
             Build run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           files: release-assets/*
+          fail_on_unmatched_files: true

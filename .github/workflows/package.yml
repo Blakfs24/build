@@ -12,6 +12,10 @@ on:
       require_android_signing:
         type: boolean
         default: false
+      build_number:
+        description: Optional YYYYMMDD build number for pre-release packages
+        type: string
+        default: ''
     outputs:
       source_sha:
         description: Exact private source commit tested and packaged
@@ -220,6 +224,13 @@ jobs:
         if: matrix.platform == 'linux'
         shell: bash
         run: make setup-linux
+
+      - name: Apply pre-release build number
+        if: inputs.build_number != ''
+        shell: bash
+        env:
+          BUILD_NUMBER_DATE: ${{ inputs.build_number }}
+        run: dart tool/update_build_number.dart "$BUILD_NUMBER_DATE"
 
       - name: Resolve Flutter dependencies
         shell: bash
